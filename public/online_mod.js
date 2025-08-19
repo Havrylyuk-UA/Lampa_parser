@@ -160,169 +160,171 @@ if (
 }
 
 /* ===========================
- *  UASerials: кнопка на екрані тайтлу
+ *  UASerials: кнопка на екрані тайтлу (fixed)
  * =========================== */
-
 (function () {
-  const UAS_ADAPTER =
-    typeof UAS_ADAPTER === "string"
-      ? UAS_ADAPTER
-      : "https://lampa-parser-lime.vercel.app";
+  try {
+    // ВАЖЛИВО: не посилатись на себе до оголошення
+    const ADAPTER =
+      typeof window !== "undefined" && window.UAS_ADAPTER
+        ? window.UAS_ADAPTER
+        : "https://lampa-parser-lime.vercel.app"; // ← підстав свій домен, якщо інший
 
-  async function UAS_jget(u) {
-    const r = await fetch(u, { headers: { Accept: "application/json" } });
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    return r.json();
-  }
+    async function jget(u) {
+      const r = await fetch(u, { headers: { Accept: "application/json" } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }
 
-  // Пошук найкращого збігу в адаптері за назвою/оригінальною назвою і роком
-  async function UAS_findBestMatch(title, originalTitle, year) {
-    const q = (title || originalTitle || "").trim();
-    if (!q) return null;
+    // Пошук у твоєму адаптері
+    async function findBestMatch(title, originalTitle, year) {
+      const q = (title || originalTitle || "").trim();
+      if (!q) return null;
 
-    const items = await UAS_jget(
-      `${UAS_ADAPTER}/api/catalog?page=1&q=${encodeURIComponent(q)}`
-    );
-    if (!Array.isArray(items) || !items.length) return null;
+      const items = await jget(
+        `${ADAPTER}/api/catalog?page=1&q=${encodeURIComponent(q)}`
+      );
+      if (!Array.isArray(items) || !items.length) return null;
 
-    // Проста евристика: спочатку повний збіг за роком, потім – частковий
-    const lc = (s) => (s || "").toLowerCase();
-    const t = lc(title);
-    const ot = lc(originalTitle);
+      const lc = (s) => (s || "").toLowerCase();
+      const t = lc(title);
+      const ot = lc(originalTitle);
 
-    let best = null,
-      bestScore = -1;
-    for (const it of items) {
-      const itTitle = lc(it.title);
-      let score = 0;
-      if (year && it.year && Number(it.year) === Number(year)) score += 3;
-      if (itTitle === t || itTitle === ot) score += 3;
-      if (itTitle.includes(t) || itTitle.includes(ot)) score += 1;
+      let best = null,
+        bestScore = -1;
+      for (const it of items) {
+        const itTitle = lc(it.title);
+        let score = 0;
+        if (year && it.year && Number(it.year) === Number(year)) score += 3;
+        if (itTitle === t || itTitle === ot) score += 3;
+        if (t && itTitle.includes(t)) score += 1;
+        if (ot && itTitle.includes(ot)) score += 1;
+        if (score > bestScore) {
+          bestScore = score;
+          best = it;
+        }
+      }
+      return best || items[0];
+    }
 
-      if (score > bestScore) {
-        bestScore = score;
-        best = it;
+    async function playByMeta(meta) {
+      try {
+        const title =
+          meta?.name ||
+          meta?.title ||
+          meta?.original_title ||
+          meta?.original_name ||
+          "";
+        const originalTitle = meta?.original_title || meta?.original_name || "";
+        const year =
+          meta?.release_year ||
+          meta?.year ||
+          (meta?.release_date || "").slice(0, 4);
+
+        const found = await findBestMatch(title, originalTitle, year);
+        if (!found)
+          return Lampa?.Noty?.show("UASerials: не знайдено в каталозі");
+
+        const streams = await jget(
+          `${ADAPTER}/api/streams?slug=${encodeURIComponent(found.id)}`
+        );
+        if (!streams.length)
+          return Lampa?.Noty?.show("UASerials: потоки не знайдені");
+
+        if (streams.length > 1 && Lampa?.Select) {
+          Lampa.Select.show({
+            title: "UASerials — оберіть якість",
+            items: streams.map((s) => ({
+              title: s.quality || "auto",
+              data: s,
+            })),
+            onSelect: (it) => startPlayer(it.data),
+          });
+        } else {
+          startPlayer(streams[0]);
+        }
+      } catch (e) {
+        Lampa?.Noty?.show("UASerials: " + (e?.message || "помилка"));
       }
     }
-    return best || items[0];
-  }
 
-  async function UAS_playByMeta(meta) {
-    try {
-      const title =
-        meta?.name ||
-        meta?.title ||
-        meta?.original_title ||
-        meta?.original_name ||
-        "";
-      const originalTitle = meta?.original_title || meta?.original_name || "";
-      const year =
-        meta?.release_year || meta?.year || meta?.release_date?.slice?.(0, 4);
-
-      const found = await UAS_findBestMatch(title, originalTitle, year);
-      if (!found) {
-        Lampa?.Noty?.show("UASerials: Не знайдено в каталозі");
-        return;
-      }
-
-      const streams = await UAS_jget(
-        `${UAS_ADAPTER}/api/streams?slug=${encodeURIComponent(found.id)}`
-      );
-      if (!streams.length) {
-        Lampa?.Noty?.show("UASerials: Потоки не знайдені");
-        return;
-      }
-
-      // Вибір якості, якщо їх кілька
-      if (streams.length > 1 && Lampa?.Select) {
-        Lampa.Select.show({
-          title: "UASerials — оберіть якість",
-          items: streams.map((s) => ({ title: s.quality || "auto", data: s })),
-          onSelect: (it) => UAS_startPlayer(it.data),
+    function startPlayer(stream) {
+      try {
+        Lampa?.Player?.play?.({
+          title: "UASerials",
+          url: stream.url,
+          subtitles: stream.subtitles || [],
+          headers: stream.headers || {},
         });
-      } else {
-        UAS_startPlayer(streams[0]);
+        Lampa?.Player?.open?.();
+      } catch (e) {
+        Lampa?.Noty?.show("UASerials: не вдалось запустити плеєр");
       }
-    } catch (e) {
-      Lampa?.Noty?.show("UASerials: помилка відтворення");
     }
-  }
 
-  function UAS_startPlayer(stream) {
-    try {
-      Lampa?.Player?.play?.({
-        title: "UASerials",
-        url: stream.url,
-        subtitles: stream.subtitles || [],
-        headers: stream.headers || {},
-      });
-      Lampa?.Player?.open?.();
-    } catch (e) {
-      Lampa?.Noty?.show("UASerials: не вдалось запустити плеєр");
+    function injectButton(container, meta) {
+      if (!container || container.querySelector(".uas-btn")) return;
+
+      const btn = document.createElement("div");
+      btn.className = "button selector uas-btn";
+      btn.style.display = "inline-flex";
+      btn.style.alignItems = "center";
+      btn.style.gap = "8px";
+      btn.style.padding = "10px 16px";
+      btn.style.borderRadius = "14px";
+      btn.style.fontWeight = "600";
+
+      const icon = document.createElement("span");
+      icon.textContent = "▶";
+      const text = document.createElement("span");
+      text.textContent = "UASerials (uaserial.top)";
+
+      btn.appendChild(icon);
+      btn.appendChild(text);
+      btn.addEventListener("click", () => playByMeta(meta));
+
+      container.appendChild(btn);
     }
-  }
 
-  // Інʼєкція кнопки у блок дій сторінки тайтлу
-  function UAS_injectButton(container, meta) {
-    if (!container || container.querySelector(".uas-btn")) return;
-
-    const btn = document.createElement("div");
-    btn.className = "button selector uas-btn";
-    btn.style.display = "inline-flex";
-    btn.style.alignItems = "center";
-    btn.style.gap = "8px";
-    btn.style.padding = "10px 16px";
-    btn.style.borderRadius = "14px";
-    btn.style.fontWeight = "600";
-
-    const icon = document.createElement("span");
-    icon.textContent = "▶"; // мінімалістична іконка
-    const text = document.createElement("span");
-    text.textContent = "UASerials (uaserial.top)";
-
-    btn.appendChild(icon);
-    btn.appendChild(text);
-    btn.addEventListener("click", () => UAS_playByMeta(meta));
-
-    container.appendChild(btn);
-  }
-
-  // Спостерігач за появою екрана "деталі"
-  const UAS_observer = new MutationObserver(() => {
-    try {
-      const full = document.querySelector(
-        '.full, .card-full, [data-component="full"]'
-      );
-      if (!full) return;
-
-      // Блок кнопок на екрані деталей (у різних збірках клас може різнитись)
-      const actions = full.querySelector(
-        ".full__buttons, .buttons, .full-actions, .full__actions, .card-actions"
-      );
-      // Витягуємо meta з Lampa, якщо є
-      const meta = (full && full.__card) || window.card || window.movie || {};
-      if (actions) UAS_injectButton(actions, meta);
-    } catch (e) {}
-  });
-
-  // Стартуємо спостерігача і дублюємо через події Lampa, якщо вони є
-  UAS_observer.observe(document.body, { childList: true, subtree: true });
-
-  if (
-    typeof Lampa !== "undefined" &&
-    Lampa.Listener &&
-    typeof Lampa.Listener.follow === "function"
-  ) {
-    Lampa.Listener.follow("full", (e) => {
-      if (e && (e.type === "build" || e.type === "open")) {
-        const root = document.querySelector(
+    // Шукаємо «екран деталей» і блок дій
+    const observer = new MutationObserver(() => {
+      try {
+        const full = document.querySelector(
           '.full, .card-full, [data-component="full"]'
         );
-        const actions = root?.querySelector(
+        if (!full) return;
+        const actions = full.querySelector(
           ".full__buttons, .buttons, .full-actions, .full__actions, .card-actions"
         );
-        UAS_injectButton(actions, e?.object || {});
-      }
+        const meta = full.__card || window.card || window.movie || {};
+        if (actions) injectButton(actions, meta);
+      } catch (e) {}
     });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    if (
+      typeof Lampa !== "undefined" &&
+      Lampa.Listener &&
+      typeof Lampa.Listener.follow === "function"
+    ) {
+      Lampa.Listener.follow("full", (e) => {
+        if (e && (e.type === "build" || e.type === "open")) {
+          const root = document.querySelector(
+            '.full, .card-full, [data-component="full"]'
+          );
+          const actions = root?.querySelector(
+            ".full__buttons, .buttons, .full-actions, .full__actions, .card-actions"
+          );
+          injectButton(actions, e?.object || {});
+        }
+      });
+    }
+  } catch (e) {
+    // не завалюємо мод при винятках
+    try {
+      Lampa &&
+        Lampa.Noty &&
+        Lampa.Noty.show("UASerials (init): " + (e.message || "error"));
+    } catch (_) {}
   }
 })();
