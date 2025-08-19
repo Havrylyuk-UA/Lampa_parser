@@ -1,50 +1,45 @@
-/**
- * UAserial Online (for Lampa)
- * Плагін для роботи з адаптером (serverless) під uaserial.top
- * Базовий адаптер: https://lampa-parser.vercel.app (зміни на свій у змінній ADAPTER нижче)
- */
-(function () {
-  'use strict';
+(()=>{
+  const getBase = () => {
+    try { return new URL('.', document.currentScript.src).origin; }
+    catch { return ''; }
+  };
+  const ADAPTER = getBase() || 'https://<your-app>.vercel.app';
 
-  const ADAPTER = 'https://lampa-parser.vercel.app'; // ← за потреби заміни на свій домен Vercel
-
-  async function jget(url) {
-    const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+  const jget = async (u) => {
+    const r = await fetch(u, { headers: { 'Accept': 'application/json' } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
-  }
+  };
 
-  function showCatalog(page = 1, q = '') {
+  function openCatalog(page = 1, q = '') {
     Lampa.Activity.push({
-      title: q ? 'Пошук: ' + q : 'UAserial',
+      title: q ? `Пошук: ${q}` : 'UAserial',
       url: '',
       page,
       component: 'category_full',
       onCreate: async function() {
         this.activity.loader(true);
         try {
-          const items = await jget(ADAPTER + '/api/catalog?page=' + page + (q ? '&q=' + encodeURIComponent(q) : ''));
+          const items = await jget(`${ADAPTER}/api/catalog?page=${page}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
           this.activity.loader(false);
-          // перетворимо в картки Lampa
-          const cards = items.map(it => ({
+          this.activity.render(items.map(it => ({
             title: it.title,
             subtitle: it.year ? String(it.year) : '',
             poster: it.poster || '',
             onclick: () => openTitle(it.id)
-          }));
-          this.activity.render(cards);
+          })));
         } catch (e) {
           this.activity.loader(false);
-          Lampa.Noty.show('Помилка каталогу: ' + (e.message || ''));
+          Lampa.Noty.show('Помилка каталогу');
         }
       },
-      onSearch: (v) => showCatalog(1, v)
+      onSearch: (v) => openCatalog(1, v)
     });
   }
 
   async function openTitle(id) {
     try {
-      const d = await jget(ADAPTER + '/api/title/' + id);
+      const d = await jget(`${ADAPTER}/api/title?slug=${encodeURIComponent(id)}`);
       Lampa.Activity.push({
         title: d.title,
         url: '',
@@ -59,16 +54,15 @@
         },
         buttons: [{ title: 'Відтворити', onclick: () => playStreams(id) }]
       });
-    } catch (e) {
-      Lampa.Noty.show('Не вдалось відкрити сторінку: ' + (e.message || ''));
+    } catch {
+      Lampa.Noty.show('Не вдалось відкрити сторінку');
     }
   }
 
   async function playStreams(id) {
     try {
-      const streams = await jget(ADAPTER + '/api/streams/' + id);
+      const streams = await jget(`${ADAPTER}/api/streams?slug=${encodeURIComponent(id)}`);
       if (!streams.length) return Lampa.Noty.show('Потоки не знайдені');
-
       if (streams.length > 1) {
         Lampa.Select.show({
           title: 'Оберіть якість',
@@ -78,8 +72,8 @@
       } else {
         startPlayer(streams[0]);
       }
-    } catch (e) {
-      Lampa.Noty.show('Не вдалось отримати потоки: ' + (e.message || ''));
+    } catch {
+      Lampa.Noty.show('Не вдалось отримати потоки');
     }
   }
 
@@ -93,14 +87,9 @@
     Lampa.Player.open();
   }
 
-  // Реєструємо пункт меню
   Lampa.Listener.follow('app', (e) => {
     if (e.type === 'ready') {
-      Lampa.Menu.add({
-        title: 'UAserial (adapter)',
-        action: () => showCatalog(1, '')
-      });
+      Lampa.Menu.add({ title: 'UAserial', action: () => openCatalog(1, '') });
     }
   });
-
 })();
