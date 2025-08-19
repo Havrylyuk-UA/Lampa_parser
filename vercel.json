@@ -4,10 +4,6 @@
     {
       "src": "/online_mod.js",
       "dest": "public/online_mod.js"
-    },
-    {
-      "src": "/",
-      "dest": "public/index.html"
     }
   ]
 }

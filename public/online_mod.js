@@ -1,137 +1,26 @@
-(()=>{
-  const getBase = () => {
-    try { return new URL('.', document.currentScript.src).origin; }
-    catch { return ''; }
-  };
-  const ADAPTER = getBase() || 'https://<your-app>.vercel.app';
 
-  const jget = async (u) => {
-    const r = await fetch(u, { headers: { 'Accept': 'application/json' } });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
-  };
-
-  function openCatalog(page = 1, q = '') {
-    Lampa.Activity.push({
-      title: q ? `Пошук: ${q}` : 'UAserial',
-      url: '',
-      page,
-      component: 'category_full',
-      onCreate: async function() {
-        this.activity.loader(true);
-        try {
-          const items = await jget(`${ADAPTER}/api/catalog?page=${page}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
-          this.activity.loader(false);
-          this.activity.render(items.map(it => ({
-            title: it.title,
-            subtitle: it.year ? String(it.year) : '',
-            poster: it.poster || '',
-            onclick: () => openTitle(it.id)
-          })));
-        } catch (e) {
-          this.activity.loader(false);
-          Lampa.Noty.show('Помилка каталогу');
-        }
-      },
-      onSearch: (v) => openCatalog(1, v)
-    });
-  }
-
-  async function openTitle(id) {
-    try {
-      const d = await jget(`${ADAPTER}/api/title?slug=${encodeURIComponent(id)}`);
-      Lampa.Activity.push({
-        title: d.title,
-        url: '',
-        component: 'full',
-        card: {
-          title: d.title,
-          original_title: d.title,
-          release_year: d.year,
-          img: d.poster,
-          genres: (d.genres || []).join(', '),
-          descr: d.description || ''
-        },
-        buttons: [{ title: 'Відтворити', onclick: () => playStreams(id) }]
-      });
-    } catch {
-      Lampa.Noty.show('Не вдалось відкрити сторінку');
-    }
-  }
-
-  async function playStreams(id) {
-    try {
-      const streams = await jget(`${ADAPTER}/api/streams?slug=${encodeURIComponent(id)}`);
-      if (!streams.length) return Lampa.Noty.show('Потоки не знайдені');
-      if (streams.length > 1) {
-        Lampa.Select.show({
-          title: 'Оберіть якість',
-          items: streams.map(s => ({ title: s.quality || 'auto', data: s })),
-          onSelect: (it) => startPlayer(it.data)
-        });
-      } else {
-        startPlayer(streams[0]);
-      }
-    } catch {
-      Lampa.Noty.show('Не вдалось отримати потоки');
-    }
-  }
-
-  function startPlayer(stream) {
-    Lampa.Player.play({
-      title: 'Відтворення',
-      url: stream.url,
-      subtitles: stream.subtitles || [],
-      headers: stream.headers || {}
-    });
-    Lampa.Player.open();
-  }
-
-  Lampa.Listener.follow('app', (e) => {
-    if (e.type === 'ready') {
-      // (UAS) Menu.add removed
-
-    }
-  });
-})();
-/* =========================================
- *  UASerials: інтеграція з "MODS's" — без Component, через Player.play/playlist
- * ========================================= */
+/* =========================================================
+ *  UASerials — online mod (unique names, rewritten for UASerials)
+ *  - Registers entry in MODS’s (if available)
+ *  - On click: searches adapter (catalog), gets streams, plays
+ *  - No Lampa.Component / No Lampa.Menu.add
+ * ========================================================= */
 (function(){
-  const ADAPTER = (window && window.UAS_ADAPTER) || 'https://lampa-parser-lime.vercel.app';
+  // Config: set your backend adapter here if needed
+  // Can be overridden by window.UAS_ADAPTER
+  const UAS_ADAPTER = (typeof window !== 'undefined' && window.UAS_ADAPTER)
+    ? window.UAS_ADAPTER
+    : 'https://lampa-parser-lime.vercel.app';
 
-  async function jget(u){
-    const r = await fetch(u, { headers: { 'Accept': 'application/json' } });
+  // ---------- helpers (unique names) ----------
+  async function UAS_fetchJSON(url){
+    const r = await fetch(url, { headers: { 'Accept':'application/json' } });
     if(!r.ok) throw new Error('HTTP '+r.status);
     return r.json();
   }
 
-  async function findBestMatch(title, originalTitle, year){
-    const q = (title || originalTitle || '').trim();
-    if(!q) return null;
-    const items = await jget(`${ADAPTER}/api/catalog?page=1&q=${encodeURIComponent(q)}`);
-    if(!Array.isArray(items) || !items.length) return null;
-
-    const lc = s => (s||'').toLowerCase();
-    const t  = lc(title);
-    const ot = lc(originalTitle);
-
-    let best = null, bestScore = -1;
-    for(const it of items){
-      const itTitle = lc(it.title);
-      let score = 0;
-      if(year && it.year && Number(it.year) === Number(year)) score += 3;
-      if(itTitle === t || itTitle === ot) score += 3;
-      if(t && itTitle.includes(t)) score += 1;
-      if(ot && itTitle.includes(ot)) score += 1;
-      if(score > bestScore){ bestScore = score; best = it; }
-    }
-    return best || items[0];
-  }
-
-  function toPlaylist(streams){
-    // будуємо плейлист для Player.playlist
-    return streams.map(s => ({
+  function UAS_toPlaylist(streams){
+    return (streams||[]).map(s => ({
       title: s.quality ? `UASerials • ${s.quality}` : 'UASerials',
       url: s.url,
       quality: s.quality || 'auto',
@@ -140,47 +29,111 @@
     }));
   }
 
-  async function runForCard(card){
+  async function UAS_findBestMatch(title, originalTitle, year){
+    const q = (title || originalTitle || '').trim();
+    if(!q) return null;
+    const items = await UAS_fetchJSON(`${UAS_ADAPTER}/api/catalog?page=1&q=${encodeURIComponent(q)}`);
+    if(!Array.isArray(items) || !items.length) return null;
+
+    const lc = s => (s||'').toLowerCase();
+    const t  = lc(title);
+    const ot = lc(originalTitle);
+
+    let best=null, score=-1;
+    for(const it of items){
+      const itTitle = lc(it.title);
+      let sc = 0;
+      if(year && it.year && Number(it.year) === Number(year)) sc += 3;
+      if(itTitle === t || itTitle === ot) sc += 3;
+      if(t && itTitle.includes(t)) sc += 1;
+      if(ot && itTitle.includes(ot)) sc += 1;
+      if(sc > score){ score = sc; best = it; }
+    }
+    return best || items[0];
+  }
+
+  async function UAS_runForCard(card){
     try{
-      Lampa?.Noty?.show('UASerials: шукаю…');
       const title = card?.name || card?.title || card?.original_title || card?.original_name || '';
-      const originalTitle = card?.original_title || card?.original_name || '';
+      const original = card?.original_title || card?.original_name || '';
       const year = card?.release_year || card?.year || (card?.release_date || '').slice?.(0,4);
 
-      const found = await findBestMatch(title, originalTitle, year);
+      const found = await UAS_findBestMatch(title, original, year);
       if(!found) return Lampa?.Noty?.show('UASerials: не знайдено в каталозі');
 
-      const streams = await jget(`${ADAPTER}/api/streams?slug=${encodeURIComponent(found.id)}`);
-      if(!streams.length) return Lampa?.Noty?.show('UASerials: потоки не знайдені');
-
-      const playlist = toPlaylist(streams);
-      if (Lampa?.Player?.playlist) {
-        Lampa.Player.playlist(playlist);
-        Lampa.Player.play(playlist[0]);
-        Lampa.Player.open();
-      } else {
-        // старі збірки без playlist: просто відтворимо перший
-        Lampa.Player.play(playlist[0]);
-        Lampa.Player.open();
+      const streams = await UAS_fetchJSON(`${UAS_ADAPTER}/api/streams?slug=${encodeURIComponent(found.id)}`);
+      if(!Array.isArray(streams) || !streams.length){
+        return Lampa?.Noty?.show('UASerials: потоки не знайдені');
       }
+
+      const playlist = UAS_toPlaylist(streams);
+      if (Lampa?.Player?.playlist) Lampa.Player.playlist(playlist);
+      Lampa?.Player?.play?.(playlist[0]);
+      Lampa?.Player?.open?.();
     } catch(e){
       Lampa?.Noty?.show('UASerials: '+(e?.message || 'помилка'));
     }
   }
 
-  if (typeof Lampa !== 'undefined' && Lampa.Listener && typeof Lampa.Listener.follow === 'function'){
+  // ---------- Integration into MODS’s (unique wrapper) ----------
+  function UAS_registerMods(card){
+    if (Lampa?.Online && typeof Lampa.Online.add === 'function'){
+      Lampa.Online.add({
+        title: 'UASerials (uaserial.top)',
+        onClick: () => UAS_runForCard(card)
+      });
+      return true;
+    }
+    return false;
+  }
+
+  // ---------- Direct button (fallback) ----------
+  function UAS_injectDirectButton(card){
+    const full = document.querySelector('.full, .card-full, [data-component="full"]');
+    if(!full) return false;
+    const actions = full.querySelector('.full__buttons, .buttons, .full-actions, .full__actions, .card-actions, .full__controls');
+    if(!actions || actions.querySelector('.uas-btn')) return false;
+
+    const btn = document.createElement('div');
+    btn.className = 'button selector uas-btn';
+    btn.style.display='inline-flex'; btn.style.alignItems='center'; btn.style.gap='8px';
+    btn.style.padding='10px 16px'; btn.style.borderRadius='14px'; btn.style.fontWeight='600';
+    btn.appendChild(Object.assign(document.createElement('span'),{textContent:'▶'}));
+    btn.appendChild(Object.assign(document.createElement('span'),{textContent:'UASerials (uaserial.top)'}));
+    btn.addEventListener('click', () => UAS_runForCard(card));
+
+    const play = actions.querySelector('.button[data-action="play"], .button.play, .full__button_play');
+    if(play && play.parentElement) play.parentElement.insertBefore(btn, play);
+    else actions.appendChild(btn);
+    return true;
+  }
+
+  // ---------- Hook title open ----------
+  if (Lampa?.Listener?.follow){
     Lampa.Listener.follow('full', (e)=>{
-      if(!e || (e.type!=='open' && e.type!=='build')) return;
+      if(!e || (e.type!=='open' && e.type!=='build' && e.type!=='render')) return;
       const card = e.object || {};
-      if (Lampa.Online && typeof Lampa.Online.add === 'function'){
-        Lampa.Online.add({
-          title: 'UASerials (uaserial.top)',
-          onClick: () => runForCard(card)
-        });
-      } else {
-        // fallback: запускаємо напряму
-        runForCard(card);
-      }
+      const ok = UAS_registerMods(card);
+      if(!ok) UAS_injectDirectButton(card);
     });
+  }
+
+  const mo = new MutationObserver(()=>{
+    const full = document.querySelector('.full, .card-full, [data-component="full"]');
+    if(full && !full.__uas_hooked){
+      full.__uas_hooked = true;
+      const card = full.__card || window.card || window.movie || {};
+      const ok = UAS_registerMods(card);
+      if(!ok) UAS_injectDirectButton(card);
+    }
+  });
+  mo.observe(document.body, { childList:true, subtree:true });
+
+  if (location.search.includes('card=')){
+    setTimeout(()=>{
+      const card = window.card || window.movie || {};
+      const ok = UAS_registerMods(card);
+      if(!ok) UAS_injectDirectButton(card);
+    }, 800);
   }
 })();
